@@ -2,7 +2,7 @@
 
 geneVa extends the existing MoVE algorithm (https://github.com/LMSE/move/tree/master/MoVE) for the computation of genetic intervention strategies consisting of static knockouts and metabolic valves. 
 
-## what's new:
+## what's new
 
 geneVa uses the field **gpr_rules** of cobra-models to **extend the network with gene-protein-reaction associations**. On the extended network, gene-based interventions can be computed in the same way as before reaction based intervention strategies. Hence, it is possible to find solutions that require **gene-KOs, gene-valves, reaction-KOs and/or reaction-valves** (e.g. interruption of the oxygen supply). GPR rules are compressed to some extend before they are integrated in the network. The extended network is again compressed with state-of-the-art techniques provided by CellNetAnalyzer. 
 

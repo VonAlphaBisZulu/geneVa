@@ -147,7 +147,7 @@ function [ kos, valves ] = calc_geneVa( cnap, target, glucose, growth_stage_min_
     D_gr_stage(3, atpm)= -1;
     d_gr_stage= [max_mue*growth_stage_min_mue; glucose_uptake_limit; -min_atpm]; %valve
     
-    if 1
+    if exist('grRules','var') && ~isempty(grRules)
     %% Gene Extension
         % get GR-rules in right format and remove notknockables
         [~, ~, genes, gpr_rules] = CNAgenerateGPRrules( cnap, grRules, 0);
@@ -263,27 +263,48 @@ function [ kos, valves ] = calc_geneVa( cnap, target, glucose, growth_stage_min_
         non_compress_reacs = unique(find(any([D_pr_stage ; D_gr_stage ; T],1)))';
         rType = repmat('r',1,cnap.numr);
         rmap = eye(cnap.numr);
-        gmap = zeros(cnap.numr,0);
+        gmap = zeros(0,cnap.numr);
+        genes = {};
         reac_off = find(lb_fva == 0 & ub_fva == 0);
+        
+        [lb_Dp, ub_Dp] = CNAfluxVariability(cnap,[],[],2,1:cnap.numr,D_pr_stage,d_pr_stage);
+        essential_prod_stage = (sign((abs(lb_Dp)>cnap.epsilon).*lb_Dp) .* ... % when lower bound sign equals
+                                sign((abs(ub_Dp)>cnap.epsilon).*ub_Dp) == 1); % upper bound sign
+
+        valvable = ones(1,cnap.numr);
+        valvable(essential_prod_stage) = 0;
+        valvable(protected_reacs) = 0; % exclude also transporters etc.
+        valvable(valve_reacs) = 1;
+        knockable = ones(1,cnap.numr);
+        knockable(protected_reacs) = 0; % exclude also transporters etc.
+        knockable(~valvable) = 0;
+        knockable(KO_reacs) = 1;
+        
         [~,~,cmp_mapReac,~,cmp_cnap]=CNAcompressMFNetwork(cnap,non_compress_reacs,[],1,0,1,reac_off,0);
         cmp_D_pr_stage = D_pr_stage*cmp_mapReac;
         cmp_D_gr_stage = D_gr_stage*cmp_mapReac;
         cmp_T  = T *cmp_mapReac;
-        protected_reacs = ~logical(abs(cmp_mapReac)'*~protected_reacs);
+        displ('FVA to bound target region',1);
+        [ lb_fva , ub_fva ] = CNAfluxVariability(cmp_cnap,[],[],2);
+        lb_relevant = abs(lb_fva-cmp_cnap.reacMin) <= cmp_cnap.epsilon;
+        ub_relevant = abs(ub_fva-cmp_cnap.reacMax) <= cmp_cnap.epsilon;
+        if any(lb_fva < 0 & lb_fva > -cmp_cnap.epsilon)
+            warning('Target region: Some reactions might be irreversible but not treated as such. This has probably numerical reasons.');
+        end
+        T_entries = [-lb_relevant , ub_relevant]';
+        T_bounds  = [-cmp_cnap.reacMin' ; cmp_cnap.reacMax']; % Using FVA bounds is identical: [-reacMin_FVA'; reacMax_FVA']; . Consider when numerical issues occur.
+        [~,T_reac] = find(T_entries);
+        cmp_T(size(cmp_T,1)+(1:length(T_reac)),:) = sparse(1:length(T_reac),T_reac,T_entries(T_entries~=0),length(T_reac),cmp_cnap.numr); % append target matrix
+        cmp_t = t;
+        cmp_t(    size(t,1) +   (1:length(T_reac)),:) = T_bounds(T_entries~=0); % append target vector
         displ('FVA to bound growth stage desired region',1);
         [lb_Dg, ub_Dg] = CNAfluxVariability(cmp_cnap,[],[],2,1:cmp_cnap.numr,cmp_D_gr_stage,d_gr_stage); % relevant for static KOs
         displ('FVA to bound production stage desired region',1);
         [lb_Dp, ub_Dp] = CNAfluxVariability(cmp_cnap,[],[],2,1:cmp_cnap.numr,cmp_D_pr_stage,d_pr_stage);
-        essential_prod_stage = (sign((abs(lb_Dp)>cnap.epsilon).*lb_Dp) .* ... % when lower bound sign equals
-                                sign((abs(ub_Dp)>cnap.epsilon).*ub_Dp) == 1); % upper bound sign
-        % define knockables and valves
-        valvable = ones(cmp_cnap.numr,1);
-        valvable(essential_prod_stage) = 0;
-        valvable(protected_reacs) = 0; % exclude also transporters etc.
 
-        knockable = ones(cmp_cnap.numr,1);
-        knockable(protected_reacs) = 0; % exclude also transporters etc.
-        knockable(~valvable) = 0;
+        cmp_knockable  = logical(abs(cmp_mapReac)'*knockable');
+        cmp_valvable   = logical(abs(cmp_mapReac)'*valvable');
+
     end
     r_irrev_pos = cmp_cnap.reacMin >= 0;
     
@@ -390,7 +411,7 @@ function [ kos, valves ] = calc_geneVa( cnap, target, glucose, growth_stage_min_
     % Expanding solution
     mcs_exp= expand_mcs(mcs, cmp_mapReac');
     valves_in_sol = cmp_mapReac*valves & valvable';
-    valid_mcs = true(size(mcs_exp,2),1);
+    valid_mcs = nan(size(mcs_exp,2),1);
     disp(['The found (compressed) solution could be expanded to ' num2str(size(mcs_exp,2)) ' strain designs. Verifying strain designs.']);
     for i = 1:size(mcs_exp,2)
     % filter expanded MCS for knockables and valvables and number of valves
@@ -412,10 +433,12 @@ function [ kos, valves ] = calc_geneVa( cnap, target, glucose, growth_stage_min_
             valid_mcs(i) = 0;
             continue;
         end
+        valid_mcs(i) = 1;
     end
-    mcs_exp = mcs_exp(:,find(valid_mcs,1));
-    disp([num2str(size(mcs_exp,2)) ' valid strain designs.']);
+    disp([num2str(sum(valid_mcs)) ' valid strain designs.']);
     disp('Returning the knockouts and valves for the first solution:');
+    
+    mcs_exp = mcs_exp(:,find(valid_mcs,1));
     
     %% First solution is prepared to be returned
     kos = mcs_exp & ~valves_in_sol;
